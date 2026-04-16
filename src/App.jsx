@@ -145,16 +145,36 @@ function App() {
     });
   }, [selectedMonth, selectedStore, allMonthsOrder, masterComputed, allMonthsMaster]);
 
+  // [기능 개선: 데이터 용량 초과 방지를 위한 청크 저장 로직]
   const saveAllStoresToServer = async () => {
     if (Object.keys(allMonthsOrder).length === 0) return alert("파일을 업로드해주세요.");
+    
     try {
       for (const month in allMonthsOrder) {
-        await setDoc(doc(db, "reports", `${month}_all_data`), {
-          month, master: allMonthsMaster[month] || [], orders: allMonthsOrder[month], savedAt: new Date().toISOString()
-        });
+        const masterData = allMonthsMaster[month] || [];
+        const orderData = allMonthsOrder[month] || [];
+
+        // 데이터가 너무 크면 쪼개서 저장 (청크 단위: 500행)
+        const chunkSize = 500;
+        for (let i = 0; i < orderData.length; i += chunkSize) {
+          const chunk = orderData.slice(i, i + chunkSize);
+          const partIndex = Math.floor(i / chunkSize) + 1;
+          
+          // 문서 ID를 '1월_all_data_part1', '1월_all_data_part2' 식으로 분산하여 1MB 제한 우회
+          await setDoc(doc(db, "reports", `${month}_all_data_part${partIndex}`), {
+            month,
+            master: i === 0 ? masterData : [], // 마스터 데이터는 첫 번째 파트에만 저장하여 용량 절약
+            orders: chunk,
+            part: partIndex,
+            savedAt: new Date().toISOString()
+          });
+        }
       }
-      alert("✅ 모든 데이터가 서버에 저장되었습니다.");
-    } catch (err) { alert("저장 오류: " + err.message); }
+      alert("✅ 용량 최적화 저장 완료! 데이터가 분할되어 안전하게 저장되었습니다.");
+    } catch (err) { 
+      console.error(err);
+      alert("저장 오류: " + err.message); 
+    }
   };
 
   const downloadExcelReport = () => {
@@ -222,7 +242,6 @@ function App() {
 
   return (
     <div 
-      // 1. 크롬, 엣지 폰트 최적화 및 2. 번역 방지 설정 추가
       style={{ 
         padding: "20px", 
         maxWidth: "1200px", 
@@ -232,8 +251,8 @@ function App() {
         textAlign: "left",
         color: "#000"
       }}
-      className="notranslate" // 구글 번역 방지 클래스
-      translate="no"          // 브라우저 번역 속성 방지
+      className="notranslate"
+      translate="no"
     >
       
       <div style={{ marginBottom: "40px" }}>
