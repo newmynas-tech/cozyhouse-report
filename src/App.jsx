@@ -21,19 +21,47 @@ function App() {
     return num ? `${num}월` : name;
   };
 
+  // [수정] 앱 실행 시 서버(Firestore)에서 데이터를 자동으로 불러오는 로직
   useEffect(() => {
-    const fetchStores = async () => {
+    const fetchData = async () => {
       try {
         const snap = await getDocs(collection(db, "reports"));
-        const names = snap.docs.map((d) => d.id.split('_').pop()); 
-        if (names.length > 0) {
-          setStoreNames([...new Set(names)].sort());
-        }
+        
+        const tempMaster = {};
+        const tempOrder = {};
+        const allStores = new Set();
+
+        snap.docs.forEach(docSnap => {
+          const data = docSnap.data();
+          const month = data.month;
+          if (!month) return;
+
+          // 1. 마스터 데이터 로드 (첫 파트에 저장된 데이터 복구)
+          if (data.master && data.master.length > 0) {
+            tempMaster[month] = data.master;
+          }
+
+          // 2. 분할 저장된 주문 데이터 합치기
+          if (!tempOrder[month]) tempOrder[month] = [];
+          const orders = data.orders || [];
+          tempOrder[month] = [...tempOrder[month], ...orders];
+
+          // 3. 매장 목록 추출
+          orders.forEach(r => {
+            const sName = String(r["매장명"] || "").trim();
+            if (sName) allStores.add(sName);
+          });
+        });
+
+        setAllMonthsMaster(tempMaster);
+        setAllMonthsOrder(tempOrder);
+        setStoreNames(Array.from(allStores).sort());
+
       } catch (err) {
-        console.error("매장 목록 로드 실패:", err);
+        console.error("데이터 초기 로드 실패:", err);
       }
     };
-    fetchStores();
+    fetchData();
   }, []);
 
   const masterComputed = useMemo(() => {
@@ -145,7 +173,7 @@ function App() {
     });
   }, [selectedMonth, selectedStore, allMonthsOrder, masterComputed, allMonthsMaster]);
 
-  // [수정된 함수: 데이터를 청크(500줄) 단위로 분할하여 partIndex로 저장]
+  // [수정] 대용량 데이터를 분할(Part)하여 서버에 저장하는 로직
   const saveAllStoresToServer = async () => {
     if (Object.keys(allMonthsOrder).length === 0) return alert("파일을 업로드해주세요.");
     
@@ -154,24 +182,21 @@ function App() {
         const masterData = allMonthsMaster[month] || [];
         const orderData = allMonthsOrder[month] || [];
 
-        // 데이터가 너무 크면 쪼개서 저장 (청크 단위: 500행)
         const chunkSize = 500;
-        
         for (let i = 0; i < orderData.length; i += chunkSize) {
           const chunk = orderData.slice(i, i + chunkSize);
           const partIndex = Math.floor(i / chunkSize) + 1;
           
-          // 문서 ID를 '1월_all_data_part1', '1월_all_data_part2' 식으로 분산하여 1MB 제한 회피
           await setDoc(doc(db, "reports", `${month}_all_data_part${partIndex}`), {
             month,
-            master: i === 0 ? masterData : [], // 마스터 데이터는 첫 파트에만 포함하여 용량 최소화
+            master: i === 0 ? masterData : [], 
             orders: chunk,
             part: partIndex,
             savedAt: new Date().toISOString()
           });
         }
       }
-      alert("✅ 용량 최적화 저장 완료! 데이터가 분할되어 안전하게 저장되었습니다.");
+      alert("✅ 서버 저장 완료! 이제 다른 자리에서도 즉시 조회가 가능합니다.");
     } catch (err) { 
       console.error(err);
       alert("저장 오류: " + err.message); 
@@ -203,11 +228,7 @@ function App() {
     const worksheet1 = XLSX.utils.aoa_to_sheet(sheet1Data);
     
     worksheet1["!cols"] = [
-      { wch: 20 }, 
-      { wch: 50 }, 
-      { wch: 10 }, 
-      { wch: 10 }, 
-      { wch: 10 } 
+      { wch: 20 }, { wch: 50 }, { wch: 10 }, { wch: 10 }, { wch: 10 } 
     ];
     XLSX.utils.book_append_sheet(workbook, worksheet1, "사용내역");
 
@@ -223,9 +244,7 @@ function App() {
     const worksheet2 = XLSX.utils.aoa_to_sheet(sheet2Data);
     
     worksheet2["!cols"] = [
-      { wch: 50 }, 
-      { wch: 15 }, 
-      { wch: 10 } 
+      { wch: 50 }, { wch: 15 }, { wch: 10 } 
     ];
     XLSX.utils.book_append_sheet(workbook, worksheet2, "미사용품목");
 
@@ -244,18 +263,12 @@ function App() {
   return (
     <div 
       style={{ 
-        padding: "20px", 
-        maxWidth: "1200px", 
-        margin: "0", 
+        padding: "20px", maxWidth: "1200px", margin: "0", 
         fontFamily: "'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-        WebkitFontSmoothing: "antialiased",
-        textAlign: "left",
-        color: "#000"
+        WebkitFontSmoothing: "antialiased", textAlign: "left", color: "#000"
       }}
-      className="notranslate"
-      translate="no"
+      className="notranslate" translate="no"
     >
-      
       <div style={{ marginBottom: "40px" }}>
         <h1 style={{ fontSize: "32px", fontWeight: "bold", margin: "0 0 20px 0", color: "#000" }}>2026년 코지하우스 매장별 전용상품 리포트</h1>
         <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
@@ -265,9 +278,6 @@ function App() {
 
       <div style={{ display: "flex", gap: "20px", marginBottom: "20px", flexWrap: "wrap" }}>
         <div style={uploadCardStyle(Object.keys(allMonthsMaster).length > 0)}>
-          {Object.keys(allMonthsMaster).length > 0 && (
-            <div style={{ position: "absolute", top: "16px", right: "16px" }}><button onClick={() => setAllMonthsMaster({})} style={deleteButtonStyle}>🗑️ 삭제</button></div>
-          )}
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "15px" }}>
             <div style={{ width: "28px", height: "28px", borderRadius: "50%", border: Object.keys(allMonthsMaster).length > 0 ? "none" : "2px solid #ccc", backgroundColor: Object.keys(allMonthsMaster).length > 0 ? "#2e7d32" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "white" }}>{Object.keys(allMonthsMaster).length > 0 ? "✓" : ""}</div>
             <h3 style={{ margin: 0, fontWeight: "bold", fontSize: "18px", color: "#000" }}>1. 전용상품 현황 업로드 (관리자용)</h3>
@@ -276,9 +286,6 @@ function App() {
         </div>
 
         <div style={uploadCardStyle(Object.keys(allMonthsOrder).length > 0)}>
-          {Object.keys(allMonthsOrder).length > 0 && (
-            <div style={{ position: "absolute", top: "16px", right: "16px" }}><button onClick={() => {setAllMonthsOrder({}); setStoreNames([]); setSelectedStore("");}} style={deleteButtonStyle}>🗑️ 삭제</button></div>
-          )}
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "15px" }}>
             <div style={{ width: "28px", height: "28px", borderRadius: "50%", border: Object.keys(allMonthsOrder).length > 0 ? "none" : "2px solid #ccc", backgroundColor: Object.keys(allMonthsOrder).length > 0 ? "#2e7d32" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", color: "white" }}>{Object.keys(allMonthsOrder).length > 0 ? "✓" : ""}</div>
             <h3 style={{ margin: 0, fontWeight: "bold", fontSize: "18px", color: "#000" }}>2. 매장별 상품내역 업로드 (관리자용)</h3>
