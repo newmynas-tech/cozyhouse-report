@@ -145,7 +145,7 @@ function App() {
     });
   }, [selectedMonth, selectedStore, allMonthsOrder, masterComputed, allMonthsMaster]);
 
-  // [기능 개선: 데이터 용량 초과 방지를 위한 청크 저장 로직]
+  // [수정된 함수: 데이터를 청크(500줄) 단위로 분할하여 partIndex로 저장]
   const saveAllStoresToServer = async () => {
     if (Object.keys(allMonthsOrder).length === 0) return alert("파일을 업로드해주세요.");
     
@@ -156,14 +156,15 @@ function App() {
 
         // 데이터가 너무 크면 쪼개서 저장 (청크 단위: 500행)
         const chunkSize = 500;
+        
         for (let i = 0; i < orderData.length; i += chunkSize) {
           const chunk = orderData.slice(i, i + chunkSize);
           const partIndex = Math.floor(i / chunkSize) + 1;
           
-          // 문서 ID를 '1월_all_data_part1', '1월_all_data_part2' 식으로 분산하여 1MB 제한 우회
+          // 문서 ID를 '1월_all_data_part1', '1월_all_data_part2' 식으로 분산하여 1MB 제한 회피
           await setDoc(doc(db, "reports", `${month}_all_data_part${partIndex}`), {
             month,
-            master: i === 0 ? masterData : [], // 마스터 데이터는 첫 번째 파트에만 저장하여 용량 절약
+            master: i === 0 ? masterData : [], // 마스터 데이터는 첫 파트에만 포함하여 용량 최소화
             orders: chunk,
             part: partIndex,
             savedAt: new Date().toISOString()
